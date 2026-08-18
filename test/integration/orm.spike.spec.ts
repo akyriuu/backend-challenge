@@ -40,7 +40,9 @@ class Money {
 
   private assertSameCurrency(other: Money): void {
     if (other.currency !== this.currency) {
-      throw new Error(`moedas incompatíveis: ${this.currency} e ${other.currency}`);
+      throw new Error(
+        `moedas incompatíveis: ${this.currency} e ${other.currency}`,
+      );
     }
   }
 }
@@ -53,7 +55,11 @@ class Wallet {
     private _version: number,
   ) {}
 
-  static open(props: { id: string; playerId: string; initialBalance: Money }): Wallet {
+  static open(props: {
+    id: string;
+    playerId: string;
+    initialBalance: Money;
+  }): Wallet {
     return new Wallet(props.id, props.playerId, props.initialBalance, 1);
   }
 
@@ -90,7 +96,7 @@ class Wallet {
 
 const WalletSchema = defineEntity({
   name: 'Wallet',
-  tableName: 'wallets',
+  tableName: 'spike_wallets',
   properties: {
     id: p.uuid().primary(),
     playerId: p.string(),
@@ -124,12 +130,12 @@ beforeAll(async () => {
     entities: [WalletSchema],
     allowGlobalContext: true,
     debug: ['query'],
-    logger: message => queries.push(message),
+    logger: (message) => queries.push(message),
   });
 
   await orm.em.getConnection().execute(`
-    drop table if exists wallets;
-    create table wallets (
+    drop table if exists spike_wallets;
+    create table spike_wallets (
       id uuid primary key,
       player_id text not null,
       currency char(3) not null,
@@ -176,7 +182,7 @@ describe('MikroORM v7 sobre Bun', () => {
       Array<{ data_type: string; numeric_scale: number }>
     >(`select data_type, numeric_scale
          from information_schema.columns
-        where table_name = 'wallets' and column_name = 'balance_amount'`);
+        where table_name = 'spike_wallets' and column_name = 'balance_amount'`);
 
     expect(rows[0]?.data_type).toBe('numeric');
     expect(rows[0]?.numeric_scale).toBe(2);
@@ -197,7 +203,9 @@ describe('MikroORM v7 sobre Bun', () => {
     em.clear();
 
     const wallet = toDomain(await em.findOneOrFail(WalletSchema, id));
-    const somado = wallet.balance.add(Money.from({ amount: '0.20', currency: 'BRL' }));
+    const somado = wallet.balance.add(
+      Money.from({ amount: '0.20', currency: 'BRL' }),
+    );
 
     const record = await em.findOneOrFail(WalletSchema, id);
     record.balanceAmount = somado.toString();
@@ -224,12 +232,12 @@ describe('MikroORM v7 sobre Bun', () => {
 
     queries.length = 0;
 
-    await em.transactional(async tx => {
+    await em.transactional(async (tx) => {
       await tx.findOneOrFail(WalletSchema, id, {
         lockMode: LockMode.PESSIMISTIC_WRITE,
       });
     });
 
-    expect(queries.some(query => query.includes('for update'))).toBe(true);
+    expect(queries.some((query) => query.includes('for update'))).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 import { Migration } from '@mikro-orm/migrations';
 
 export class Migration20260817220000_create_wallets extends Migration {
-  override async up(): Promise<void> {
+  override up(): void {
     this.addSql(`
       create table wallets (
         id uuid primary key,
@@ -23,7 +23,7 @@ export class Migration20260817220000_create_wallets extends Migration {
     `);
   }
 
-  override async down(): Promise<void> {
+  override down(): void {
     this.addSql('drop table if exists wallets;');
   }
 }
