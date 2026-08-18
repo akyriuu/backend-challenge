@@ -5,6 +5,11 @@ import {
   InvalidCurrencyError,
 } from './errors';
 
+export interface MoneyProps {
+  amount: string;
+  currency: string;
+}
+
 const AMOUNT_PATTERN = /^\d+(\.\d{1,2})?$/;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 const SCALE = 2;
@@ -17,13 +22,8 @@ export class Money {
     Object.freeze(this);
   }
 
-  static from({
-    amount,
-    currency,
-  }: {
-    amount: string;
-    currency: string;
-  }): Money {
+  /** Contrato de entrada: rejeita negativo, escala acima de 2 e não decimais. */
+  static from({ amount, currency }: MoneyProps): Money {
     if (!CURRENCY_PATTERN.test(currency)) {
       throw new InvalidCurrencyError(currency);
     }
@@ -48,13 +48,11 @@ export class Money {
   subtract(other: Money): Money {
     this.assertSameCurrency(other);
 
-    const result = this.value.minus(other.value);
+    return new Money(this.value.minus(other.value), this.currency);
+  }
 
-    if (result.isNegative()) {
-      throw new InvalidAmountError(result.toString());
-    }
-
-    return new Money(result, this.currency);
+  negate(): Money {
+    return new Money(this.value.negated(), this.currency);
   }
 
   isLessThan(other: Money): boolean {
@@ -75,6 +73,18 @@ export class Money {
 
   isZero(): boolean {
     return this.value.isZero();
+  }
+
+  isPositive(): boolean {
+    return this.value.greaterThan(0);
+  }
+
+  isNegative(): boolean {
+    return this.value.lessThan(0);
+  }
+
+  toJSON(): MoneyProps {
+    return { amount: this.toString(), currency: this.currency };
   }
 
   toString(): string {

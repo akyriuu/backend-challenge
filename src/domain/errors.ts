@@ -32,3 +32,21 @@ export class InsufficientFundsError extends DomainError {
     );
   }
 }
+
+export class InvalidTransactionStateError extends DomainError {
+  constructor(from: string, to: string) {
+    super(`transição inválida de ${from} para ${to}`);
+  }
+}
+
+export class InvalidReferenceError extends DomainError {
+  constructor(reason: string) {
+    super(`referência de estorno inválida: ${reason}`);
+  }
+}
+
+export class UnbalancedLedgerEntryError extends DomainError {
+  constructor(detail: string) {
+    super(`lançamento de ledger inconsistente: ${detail}`);
+  }
+}

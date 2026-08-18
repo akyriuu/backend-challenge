@@ -65,3 +65,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Notas locais de planejamento
 checklist.md
+
+
+/bet*.json

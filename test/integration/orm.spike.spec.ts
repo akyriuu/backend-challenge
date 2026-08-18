@@ -2,8 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { defineEntity, p, t, type InferEntity } from '@mikro-orm/core';
 import { LockMode, MikroORM } from '@mikro-orm/postgresql';
 import Decimal from 'decimal.js';
+import { env } from '@/config/env';
 
-const DB_URL = 'postgresql://wager:wager@localhost:2004/wager';
+const DB_URL = env.databaseUrl;
 
 // ---------- domínio (puro, sem nenhum import do ORM) ----------
 

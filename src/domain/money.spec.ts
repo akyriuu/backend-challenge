@@ -35,7 +35,7 @@ describe('Money', () => {
       }
     });
 
-    it('rejeita valores negativos', () => {
+    it('rejeita valor negativo no contrato de entrada', () => {
       expect(() => brl('-1.00')).toThrow(InvalidAmountError);
     });
 
@@ -66,10 +66,16 @@ describe('Money', () => {
       expect(saldo.toString()).toBe('100.00');
     });
 
-    it('recusa subtração que resultaria em valor negativo', () => {
-      expect(() => brl('10.00').subtract(brl('10.01'))).toThrow(
-        InvalidAmountError,
-      );
+    it('produz valor negativo quando o resultado cruza o zero', () => {
+      const diferenca = brl('10.00').subtract(brl('10.01'));
+
+      expect(diferenca.toString()).toBe('-0.01');
+      expect(diferenca.isNegative()).toBe(true);
+    });
+
+    it('inverte o sinal com negate', () => {
+      expect(brl('25.00').negate().toString()).toBe('-25.00');
+      expect(brl('25.00').negate().negate().toString()).toBe('25.00');
     });
 
     it('recusa operar entre moedas diferentes', () => {
@@ -98,11 +104,42 @@ describe('Money', () => {
     it('ordena valores da mesma moeda', () => {
       expect(brl('9.99').isLessThan(brl('10.00'))).toBe(true);
       expect(brl('10.00').isLessThan(brl('9.99'))).toBe(false);
+      expect(brl('10.00').isGreaterThan(brl('9.99'))).toBe(true);
     });
 
     it('constrói o zero da moeda', () => {
       expect(Money.zero('BRL').toString()).toBe('0.00');
       expect(Money.zero('BRL').isZero()).toBe(true);
+    });
+
+    it('o zero não é positivo nem negativo', () => {
+      const zero = Money.zero('BRL');
+
+      expect(zero.isPositive()).toBe(false);
+      expect(zero.isNegative()).toBe(false);
+    });
+
+    it('a subtração de valores iguais resulta em zero, sem sinal', () => {
+      const zero = brl('10.00').subtract(brl('10.00'));
+
+      expect(zero.toString()).toBe('0.00');
+      expect(zero.isNegative()).toBe(false);
+    });
+  });
+
+  describe('serialização', () => {
+    it('expõe o par amount/currency com escala fixa', () => {
+      expect(brl('25.5').toJSON()).toEqual({
+        amount: '25.50',
+        currency: 'BRL',
+      });
+    });
+
+    it('serializa negativos preservando o sinal', () => {
+      expect(brl('25.00').negate().toJSON()).toEqual({
+        amount: '-25.00',
+        currency: 'BRL',
+      });
     });
   });
 });
