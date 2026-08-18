@@ -399,28 +399,33 @@ em vez de no ciclo de vida do módulo.
 
 --------------------------------------------------------------------------------------
 ## Domínio: representação de dinheiro
-### 18. `Money` não consegue representar valor negativo
-**Contexto.** Saldo negativo é uma das falhas eliminatórias do enunciado. A
-abordagem usual é permitir que o tipo monetário carregue sinal e verificar a
-não-negatividade no agregado, antes de cada escrita.
-**Decisão.** `Money.from` rejeita qualquer entrada com sinal negativo, e
-`subtract` lança quando o resultado ficaria abaixo de zero. Não existe instância
-de `Money` com valor negativo em nenhum ponto do ciclo de vida.
-**Consequência.** A invariante deixa de depender de alguém lembrar de chamar uma
-verificação: um saldo negativo é inexprimível no sistema de tipos do domínio, e
-não apenas proibido por convenção. O `Wallet` compara antes de subtrair
-(`balance.isLessThan(amount)`) para produzir `InsufficientFundsError` com saldo
-disponível e valor solicitado; o lançamento dentro de `subtract` é a rede de
-segurança final, para o caso de algum caminho futuro esquecer a comparação.
-**Custo aceito.** Operações que precisariam de sinal — por exemplo, reconciliar
-somando créditos e subtraindo débitos — têm que ser expressas por comparação e
-direção explícita (`DEBIT`/`CREDIT`) em vez de aritmética com sinal. Isso é mais
-verboso, mas evita que a direção do lançamento fique implícita no sinal do valor,
-que é uma fonte clássica de erro em ledger.
-**Alternativa descartada.** `Money` com sinal, deixando a não-negatividade a
-cargo do agregado. Mais flexível, e foi o que o spike do passo 1 usou — mas move
-a garantia para um ponto que pode ser contornado por qualquer código novo que
-construa um `Money` diretamente.
+
+### 18. `Money` tem sinal, mas o contrato de entrada rejeita negativos
+
+**Contexto.** Saldo negativo é falha eliminatória, o que sugere um tipo monetário
+incapaz de representar negativo. Duas exigências do enunciado impedem isso: o
+esqueleto da seção 6.1 prevê `negate()` e `isNegative()`, e a resposta de
+reconciliação da seção 9 carrega um campo `difference` que é negativo sempre que
+o saldo reconstruído supera o armazenado — precisamente o caso que a
+reconciliação existe para revelar.
+
+**Decisão.** `Money.from` rejeita string com sinal negativo, porque é o contrato
+de entrada citado pelo enunciado. A aritmética interna pode produzir negativo, e
+`negate()` inverte o sinal explicitamente.
+
+**Consequência.** A garantia de saldo não-negativo deixa de estar no tipo e passa
+a ter dois guardiões: a comparação em `Wallet.debit`, que produz
+`InsufficientFundsError` com contexto, e o `CHECK (balance >= 0)` da migration,
+que é a garantia final exigida pela restrição 9 da seção 5. Como o tipo não
+protege mais essa invariante sozinho, o teste que verifica que um débito
+recusado não altera saldo nem versão passa a ser o principal teste de regressão
+do agregado.
+
+**Alternativa descartada.** `Money` sem sinal, com `subtract` lançando ao cruzar
+o zero. Torna saldo negativo inexprimível, mas inviabiliza representar a
+diferença de reconciliação e obrigaria um segundo tipo só para isso.
+
+
 ### 19. A única exceção de lint do projeto, e por que ela existe
 **Contexto.** A guarda de `src/domain` proíbe `Number(`, `parseFloat`,
 `parseInt`, `+` unário e `toFixed`, por casamento sintático. O casamento de
@@ -443,3 +448,287 @@ parece desconhecer a ferramenta.
 **Verificação.** A exceção foi confirmada removendo o comentário de `disable` e
 observando a guarda acusar a linha, e recolocando-o em seguida. Um `disable` que
 silencia uma regra que nunca dispararia é ruído; este silencia uma detecção real.
+
+
+### 20. Abertura de carteira devolve carteira e lançamento juntos
+
+**Contexto.** A seção 9 do enunciado mostra `POST /wallets` respondendo
+`version: 1` para uma carteira aberta com saldo inicial, e ao mesmo tempo exige
+que esse saldo gere uma transação `OPENING` com lançamento `CREDIT` na mesma
+transação SQL. A invariante da seção 6.2 diz que toda alteração de saldo tem
+lançamento correspondente.
+
+**Decisão.** `Wallet.open` devolve `{ wallet, openingEntry }`. A carteira nasce
+já com o saldo — abertura não é alteração de saldo, e por isso a versão
+permanece em 1 — e o lançamento de abertura, quando o saldo inicial é maior que
+zero, sai da mesma chamada, com `balanceBefore` igual a zero.
+
+**Consequência.** Não existe caminho em que o saldo nasça sem ledger: o caso de
+uso não tem como obter a carteira sem receber o lançamento junto. O custo é uma
+factory que devolve um par em vez de uma instância, e a necessidade de informar
+os identificadores do lançamento e da transação de abertura já na criação.
+
+**Alternativa descartada.** Abrir a carteira zerada e aplicar o saldo inicial
+por `credit`. Reaproveitaria o caminho normal, mas levaria a versão a 2,
+contrariando o exemplo do enunciado, e trataria como movimentação algo que é
+estado inicial.
+
+**Relógio.** `openedAt` e `occurredAt` entram por parâmetro em vez de `new Date()`
+dentro do domínio, seguindo o mesmo padrão que o enunciado adota em
+`markProcessed(referenceTransactionId, at)`. O domínio permanece determinístico e
+os testes não precisam de relógio falso.
+
+### 21. Taxonomia de códigos de falha organizada pela decisão do provedor
+
+**Contexto.** A seção 7.2 exige um `failureCode` estável e legível por máquina,
+suficiente para o provedor decidir se reenvia, corrige o payload ou desiste, e
+deixa a taxonomia a cargo do candidato.
+
+**Decisão.** Os códigos são agrupados exatamente por essa decisão, e não por
+camada técnica: rejeições de regra de negócio (reenviar não resolve), payload
+inválido (corrigir e reenviar resolve) e falha permanente de infraestrutura
+(auditável, sem reprocessamento automático).
+
+**Consequência.** O provedor não precisa interpretar mensagem de erro nem
+consultar documentação para saber o que fazer — o grupo do código já responde.
+`INSUFFICIENT_FUNDS` e `REVERSAL_WOULD_OVERDRAW` são códigos distintos, como
+exige a regra 9 da seção 7, porque descrevem situações operacionalmente opostas:
+o primeiro é comportamento normal do jogador; o segundo significa que o dinheiro
+da referência já saiu da carteira por outro caminho, e pede investigação.
+
+### 22. Referência inválida devolve código; direção de `LOSS` lança
+
+**Contexto.** O agregado precisa distinguir duas classes de problema que em
+TypeScript costumam virar a mesma coisa: violação de regra de negócio e erro de
+programação.
+
+**Decisão.** `validateReference` devolve `FailureCode | undefined`. `ledgerDirectionFor`
+sobre um `LOSS`, ou sobre um `ROLLBACK` sem referência, lança.
+
+**Justificativa.** Referência inválida é caminho de negócio previsto: vira uma
+transação `REJECTED` persistida, com código, e um evento `WagerTransactionRejected`.
+Se lançasse, o caso de uso teria que capturar exceção e traduzi-la para código —
+o acoplamento por mensagem de erro que a seção 9 critica ao exigir que a API
+distinga as situações por status. Já perguntar a direção de lançamento de um
+`LOSS` é impossível por construção: `affectsBalance()` é falso e nenhum
+lançamento existe. Só chega ali quem escreveu o caso de uso errado, e o lugar de
+descobrir isso é o teste, com stack trace.
+
+### 23. `OPENING` é inacessível pela factory pública
+
+**Contexto.** A seção 6.3 determina que `OPENING` é interno e não pode ser
+submetido por API nem por fila.
+
+**Decisão.** `WagerTransaction.create` recusa `kind: 'OPENING'`. A criação passa
+por `recordOpening`, factory separada, que nasce já `PROCESSED`.
+
+**Consequência.** A regra deixa de depender de validação no controller ou no
+consumidor — mesmo que ambos esqueçam, o domínio recusa. E como as duas factories
+delegam à mesma construção privada, as validações comuns não divergem.
+
+### 24. Dupla reversão é responsabilidade do banco, não do agregado
+
+**Contexto.** A regra 4 da seção 7 proíbe reverter a mesma referência duas vezes
+pelo mesmo tipo de operação.
+
+**Decisão.** Essa regra **não** é verificada no agregado. Ela vive no índice
+único parcial `(reference_transaction_id, kind)`, e o caso de uso traduz a
+violação de constraint em `REFERENCE_ALREADY_REVERSED`.
+
+**Justificativa.** Um agregado isolado não conhece as outras transações, então
+qualquer verificação em memória seria um `select` seguido de `insert` — ou seja,
+uma janela de corrida entre instâncias, exatamente o que a restrição 8 da seção
+5 proíbe. A única verificação atômica poss
+
+### 25. A imutabilidade do ledger exige um papel sem superpoderes
+
+**Contexto.** A restrição 5 da seção 5 proíbe sobrescrever ou excluir lançamentos,
+e a restrição 9 exige que a garantia esteja no schema. A migration revoga
+`UPDATE` e `DELETE` sobre `wallet_ledger_entries`, e o catálogo confirma a
+revogação.
+
+**Descoberta.** O teste de integração mostrou que a revogação não tinha efeito: o
+usuário criado por `POSTGRES_USER` é o superusuário de bootstrap do cluster, e
+superusuário ignora verificação de ACL. A garantia existia no catálogo e não no
+comportamento — precisamente a diferença que um teste de constraint em SQL cru
+serve para revelar.
+
+**Decisão.** Um papel dedicado `wager_app`, sem superusuário, é criado no
+`initdb` e passa a ser o usuário da aplicação e das migrations. Como ele é dono
+das tabelas mas não superusuário, a revogação é efetivamente aplicada — o dono
+mantém apenas a capacidade de reconceder explicitamente a si mesmo.
+
+**Limitação conhecida.** `TRUNCATE` é um privilégio distinto de `DELETE` e
+permanece com o dono, deliberadamente, porque as fixtures dos testes de
+integração precisam zerar as tabelas. Num ambiente produtivo o correto é a
+aplicação conectar com um papel que não seja dono e possua apenas `SELECT` e
+`INSERT` sobre o ledger, com as migrations rodando sob um papel separado.
+
+**Evidência.** Os testes `é imutável: UPDATE é negado no nível de privilégio` e
+o equivalente para `DELETE` falharam antes desta mudança, com o `UPDATE` sendo
+autorizado e barrado apenas pelo `CHECK` de aritmética — o que também confirma
+que aquele `CHECK` é uma segunda linha de defesa útil, e não redundância.
+
+### 26. Uma porta de unidade de trabalho, não repositórios independentes
+
+**Contexto.** A seção 11 exige que transação, saldo, ledger, inbox e outbox
+participem da mesma transação SQL. Repositórios injetados isoladamente, cada um
+com seu `EntityManager`, tornariam essa atomicidade uma convenção — bastaria
+alguém esquecer de abrir a transação para o evento ser publicado sem o débito.
+
+**Decisão.** Existe uma única porta `UnitOfWork`, cujo `run` recebe um callback e
+entrega um `TransactionalContext` com os quatro repositórios já vinculados ao
+`EntityManager` da transação. Fora desse callback não há repositório acessível.
+
+**Consequência.** A atomicidade deixa de depender de disciplina: não existe forma
+de obter um repositório sem estar dentro de uma transação. O caso de uso não
+importa nada de `@mikro-orm/*` e pode ser exercitado com um contexto em memória.
+
+### 27. Escrita explícita a cada operação, em vez de um flush único no commit
+
+**Contexto.** As chaves estrangeiras entre transação, lançamento e carteira estão
+no schema, mas não nos metadados do MikroORM — os modelos de persistência usam
+colunas escalares de identificador, sem relações declaradas, como consequência da
+decisão 8. Sem relações, o Unit of Work não conhece a ordem de dependência e a
+ordem dos `INSERT` no flush final é arbitrária.
+
+**Decisão.** Cada método de repositório executa `flush` imediatamente. A ordem das
+escritas passa a ser a ordem em que o caso de uso as invoca.
+
+**Consequência.** A ordem correta é garantida por construção, e não por inferência
+do ORM. O custo é uma ida ao banco por operação em vez de uma só no commit —
+aceitável porque a transação continua atômica, já que `flush` grava mas quem
+confirma é o `transactional`.
+
+**Alternativa descartada.** Declarar as relações com `manyToOne().mapToPk()` para
+que o ORM calcule a ordem de commit. Recupera o flush único, mas reintroduz
+metadados de relação num modelo que existe justamente para ser plano, e torna a
+ordem das escritas financeiras um detalhe interno do ORM.
+
+### 28. O saldo do replay vem do lançamento, não da carteira
+
+**Contexto.** A regra 7 da seção 7 determina que repetir uma operação já
+processada devolva o resultado original, "incluindo o saldo observado naquele
+momento".
+
+**Decisão.** No caminho de replay, o saldo devolvido é o `balanceAfter` do
+lançamento daquela transação, e não o saldo atual da carteira.
+
+**Justificativa.** É a leitura literal da regra, e é o que torna a resposta
+idempotente de verdade: se cinco apostas ocorreram depois, o replay da primeira
+continua respondendo o saldo que ela produziu. Devolver o saldo corrente faria a
+mesma requisição, repetida duas vezes, produzir respostas diferentes — que é
+exatamente o que idempotência deveria impedir. É também a razão de `balanceBefore`
+e `balanceAfter` existirem no lançamento, e não apenas o valor movimentado.
+
+--------------------------------------------------------------------------------------
+## Reconciliação, mensageria e concorrência
+### 29. A reconciliação lê sob lock e nunca corrige
+**Contexto.** A seção 9 exige que divergências entre saldo materializado e ledger
+sejam logadas, contabilizadas e sinalizadas — nunca corrigidas silenciosamente.
+**Decisão.** `ReconcileWallet` carrega a carteira com `FOR UPDATE` antes de somar
+os lançamentos, e devolve `storedBalance`, `calculatedBalance`, `difference`,
+`consistent` e `checkedEntries` sem alterar nada.
+**Justificativa do lock.** Sem ele, uma escrita concorrente entre a leitura do
+saldo e a soma do ledger produziria divergência falsa. Uma reconciliação que
+grita lobo perde a serventia: se ela acusa erro em condições normais de
+concorrência, ninguém mais confia no alerta quando o erro for real.
+**Justificativa de não corrigir.** Divergência significa que algo escreveu no
+banco por fora do caso de uso. Ajustar o saldo destruiria a única evidência
+disso e transformaria um incidente investigável num número que ninguém explica.
+**Consequência.** A diferença pode ser negativa — o ledger supera o saldo — e é
+por isso que a decisão 18 precisou ser revista para `Money` com sinal. Um teste
+cobre exatamente esse caso.
+### 30. O publisher reclama mensagens pulando as travadas
+**Contexto.** A seção 11 exige que múltiplos publishers concorrentes funcionem
+sem perder nem duplicar indefinidamente.
+**Decisão.** `MikroOrmOutboxStore.drain` seleciona o lote com
+`LockMode.PESSIMISTIC_PARTIAL_WRITE`, que o PostgreSQL traduz para
+`FOR UPDATE SKIP LOCKED`, e marca `published_at` na mesma transação.
+**Consequência.** N publishers dividem o trabalho: cada um trava o que conseguir
+e ignora o que outro já reservou, sem espera. Com `FOR UPDATE` comum, o segundo
+publisher bloquearia até o primeiro terminar — funcionaria, mas seria
+serialização disfarçada de paralelismo. Um teste com dois publishers e 40
+mensagens verifica que nenhuma foi entregue duas vezes e nenhuma se perdeu.
+**Limitação aceita.** A transação permanece aberta durante as chamadas ao SQS.
+Se o processo morrer entre a publicação e o commit, a mensagem é republicada —
+entrega at-least-once, absorvida pelo inbox do consumidor. Fechar a transação
+antes de publicar inverteria o risco para perda de evento, que é pior.
+**Falha isolada por mensagem.** Um evento problemático incrementa `attempts` e
+recebe `next_attempt_at` com backoff exponencial limitado a cinco minutos,
+enquanto os demais do lote seguem. Sem isso, uma única mensagem defeituosa
+travaria a fila inteira.
+### 31. Eventos de integração têm fila própria
+**Contexto.** A seção 10 nomeia `wager-transactions.fifo` e sua DLQ como filas de
+**entrada** de transações. A seção 11 exige publicar eventos de integração, mas
+não nomeia destino.
+**Decisão.** Uma fila separada, `wager-events.fifo`, com DLQ própria, provisionada
+pelo mesmo script de init do LocalStack.
+**Justificativa.** Publicar os eventos na fila de entrada faria o consumidor ler
+os próprios eventos como se fossem pedidos de transação — um laço de realimentação
+que só apareceria em produção.
+### 32. Agrupamento FIFO por carteira, com deduplicação explícita no envio
+**Decisão.** O `MessageGroupId` de cada evento é o `aggregateId`, que é o
+identificador da carteira. O `MessageDeduplicationId` é o `eventId`.
+**Consequência.** A ordem é preservada **por carteira**, que é a unidade de
+concorrência definida na seção 8, sem serializar carteiras distintas — um único
+grupo global transformaria a fila num gargalo. E como as filas foram criadas com
+`ContentBasedDeduplication` desligado (decisão 16), informar o id de
+deduplicação deixa de ser opcional: é o que impede o mesmo evento de entrar duas
+vezes quando o publisher republica após uma falha entre publicação e commit.
+### 33. Inbox e efeito financeiro são a mesma transação, com um só carimbo
+**Contexto.** A seção 11 exige que inbox, alteração de saldo, ledger e outbox
+participem da mesma transação SQL.
+**Decisão.** O registro do inbox acontece dentro do `UnitOfWork` do caso de uso,
+por `insert ... on conflict do nothing`, e grava `received_at` e `processed_at`
+com o mesmo instante.
+**Justificativa do carimbo único.** Os dois só divergiriam se registrar e
+processar estivessem em transações diferentes. Sendo atômicos, a existência da
+linha já significa processamento concluído: se a transação abortar, a linha some
+junto. Manter dois carimbos idênticos por fidelidade ao esqueleto do enunciado
+sugeriria uma distinção que o desenho não tem.
+**Justificativa do `on conflict`.** No PostgreSQL, uma violação de constraint
+aborta a transação inteira, e capturar a exceção em JavaScript não a desfaz —
+qualquer comando seguinte falharia com "current transaction is aborted".
+`on conflict do nothing ... returning` resolve a corrida sem abortar nada.
+**Camadas distintas.** Reentrega não interrompe o fluxo: ela segue para o replay
+por chave de idempotência, que devolve o resultado original. O inbox impede
+reprocessar; a chave de idempotência garante a resposta certa. É a leitura
+prática da restrição 3 da seção 5, que proíbe confiar apenas no broker.
+### 34. Três desfechos distintos para falha no consumidor
+**Contexto.** A seção 10 exige distinguir erro de negócio, transitório e
+permanente.
+**Decisão.** Rejeição de negócio — saldo insuficiente, referência inválida — não
+é exceção: o caso de uso devolve `REJECTED`, a mensagem é confirmada e o evento
+de rejeição sai pelo outbox. Payload malformado e conflito de idempotência são
+permanentes: vão para a DLQ explicitamente e só então recebem ack. Qualquer
+outra falha é tratada como transitória: a mensagem **não** é confirmada, o SQS a
+reentrega ao expirar a visibilidade, e a política de redrive a leva à DLQ ao
+esgotar `maxReceiveCount`.
+**Ordem que importa.** O envio à DLQ precede o ack. Invertida, um processo que
+morresse no meio faria a mensagem desaparecer sem ter chegado a lugar nenhum.
+**Validação antecipada.** O parser valida a quantia com `Money.from` antes de
+qualquer acesso ao banco. Valor com três casas decimais é defeito de payload, não
+indisponibilidade — descobrir isso no parser manda a mensagem à DLQ de imediato,
+em vez de gastar cinco entregas até o `maxReceiveCount`.
+**Ack somente após commit.** O `execute` só retorna depois do commit, e o ack vem
+depois dele. Morrer entre commit e ack causa reentrega, absorvida pelo inbox;
+morrer antes do commit não deixa efeito algum.
+### 35. "Múltiplas instâncias" nos testes são instâncias de ORM
+**Contexto.** A seção 13 exige testes com três ou mais processos ou instâncias
+simultâneos.
+**Decisão.** Os testes de concorrência criam três instâncias independentes de
+`MikroORM`, cada uma com pool de conexões e identity map próprios, e executam o
+caso de uso em paralelo sobre elas.
+**Justificativa.** As invariantes vivem no PostgreSQL, e o único estado
+compartilhado entre instâncias da aplicação é o banco. Do ponto de vista de
+locking, três pools distintos são indistinguíveis de três processos.
+**Limitação conhecida e assumida.** Processos de sistema operacional separados
+provariam isolamento de memória, que este desenho não usa para nada — não há
+cache em memória participando de nenhuma garantia, o que a restrição 2 da seção 5
+aliás proíbe. O que essa abordagem **não** cobre é falha de processo no meio de
+uma operação; esse cenário é exercitado de outra forma, reproduzindo em banco o
+estado que um processo morto entre o commit e o ack deixaria.
+**Efeito colateral operacional.** O consumidor da aplicação compete com o
+consumidor dos testes pela mesma fila. Por isso `CONSUMER_ENABLED` existe: a
+suíte de integração pressupõe a aplicação parada ou o consumidor desligado.
