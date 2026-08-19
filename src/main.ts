@@ -1,11 +1,15 @@
-import { ValidationPipe } from '@nestjs/common';
+import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DomainExceptionFilter } from './api/domain-exception.filter';
+import { InfrastructureExceptionFilter } from './api/infrastructure-exception.filter';
 import { env } from './config/env';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    /** JSON compacto: uma linha por evento, agregável por qualquer coletor. */
+    logger: new ConsoleLogger({ json: true, colors: false, compact: true }),
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -14,7 +18,10 @@ async function bootstrap(): Promise<void> {
       transform: true,
     }),
   );
-  app.useGlobalFilters(new DomainExceptionFilter());
+  app.useGlobalFilters(
+    new DomainExceptionFilter(),
+    new InfrastructureExceptionFilter(),
+  );
 
   app.enableShutdownHooks();
 

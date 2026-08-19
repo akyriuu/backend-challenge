@@ -1,5 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { EntityManager, LockMode } from '@mikro-orm/postgresql';
+import {
+  METRICS,
+  noopMetrics,
+  type Metrics,
+} from '@/application/ports/metrics';
 import type { OutboxStore, PendingMessage } from '@/application/ports/outbox';
 import { OutboxMessageSchema } from './schemas/outbox-message.schema';
 
@@ -16,7 +21,12 @@ const nextAttemptAfter = (attempts: number, now: Date): Date => {
 export class MikroOrmOutboxStore implements OutboxStore {
   private readonly logger = new Logger(MikroOrmOutboxStore.name);
 
-  constructor(private readonly em: EntityManager) {}
+  constructor(
+    private readonly em: EntityManager,
+    @Optional()
+    @Inject(METRICS)
+    private readonly metrics: Metrics = noopMetrics,
+  ) {}
 
   async drain(
     batchSize: number,
@@ -34,7 +44,7 @@ export class MikroOrmOutboxStore implements OutboxStore {
         {
           limit: batchSize,
           orderBy: { occurredAt: 'asc' },
-          lockMode: LockMode.PESSIMISTIC_WRITE,
+          lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE,
         },
       );
 
@@ -53,9 +63,17 @@ export class MikroOrmOutboxStore implements OutboxStore {
 
           record.publishedAt = new Date();
           published += 1;
+
+          this.metrics.increment('wager_outbox_published_total', {
+            eventType: record.eventType,
+          });
         } catch (error) {
           record.attempts += 1;
           record.nextAttemptAt = nextAttemptAfter(record.attempts, now);
+
+          this.metrics.increment('wager_outbox_retries_total', {
+            eventType: record.eventType,
+          });
 
           this.logger.warn({
             message: 'falha ao publicar evento do outbox',
@@ -72,5 +90,17 @@ export class MikroOrmOutboxStore implements OutboxStore {
 
       return published;
     });
+  }
+
+  async oldestPendingAgeSeconds(): Promise<number> {
+    const rows = await this.em.getConnection().execute<{ lag: number }[]>(
+      `select coalesce(
+                extract(epoch from now() - min(occurred_at))::int, 0
+              ) as lag
+         from outbox_messages
+        where published_at is null`,
+    );
+
+    return rows[0]?.lag ?? 0;
   }
 }

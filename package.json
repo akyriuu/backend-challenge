@@ -13,11 +13,13 @@
     "test:integration": "bun test test/integration --timeout 30000",
     "lint": "eslint \"{src,test}/**/*.ts\"",
     "format": "prettier --write \"{src,test}/**/*.ts\"",
-    "check": "bun run typecheck && bun run lint && bun run test",
+    "check": "bun run typecheck && bun run lint && bun run check:migrations && bun run test",
     "check:all": "bun run check && bun run test:integration",
     "migration:up": "bun run src/infrastructure/database/migrate.ts up",
     "migration:down": "bun run src/infrastructure/database/migrate.ts down",
-    "migration:list": "bun run src/infrastructure/database/migrate.ts list"
+    "migration:list": "bun run src/infrastructure/database/migrate.ts list",
+    "check:migrations": "bun run scripts/check-migrations.ts"
+    
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.1112.0",

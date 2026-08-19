@@ -34,4 +34,9 @@ export const env = {
     waitTimeSeconds: Number(process.env.CONSUMER_WAIT_TIME_SECONDS ?? 5),
     batchSize: Number(process.env.CONSUMER_BATCH_SIZE ?? 10),
   },
+  pendingReference: {
+    maxAttempts: Number(process.env.PENDING_REFERENCE_MAX_ATTEMPTS ?? 12),
+    pollIntervalMs: Number(process.env.PENDING_REFERENCE_POLL_MS ?? 5000),
+    batchSize: Number(process.env.PENDING_REFERENCE_BATCH_SIZE ?? 20),
+  },
 } as const;

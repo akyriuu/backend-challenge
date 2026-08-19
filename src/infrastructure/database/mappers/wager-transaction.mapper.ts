@@ -22,6 +22,7 @@ export const toWagerTransactionRecordData = (
   referenceTransactionId: transaction.referenceTransactionId ?? null,
   status: transaction.status,
   failureCode: transaction.failureCode ?? null,
+  referenceAttempts: 0,
   createdAt: transaction.createdAt,
   processedAt: transaction.processedAt ?? null,
 });

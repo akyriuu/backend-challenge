@@ -1,98 +1,146 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# BACKEND CHALLENGE
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Serviço financeiro distribuído que processa transações de apostas vindas de
+múltiplos provedores, por HTTP e por fila, com garantias de correção monetária,
+idempotência persistente e consistência entre saldo materializado e ledger.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+As decisões técnicas, com alternativas descartadas e limitações conhecidas, estão
+em [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
-## Description
+## Stack
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+Bun 1.3 como runtime, gerenciador de pacotes e test runner. NestJS 11,
+TypeScript em modo estrito, PostgreSQL 17 com MikroORM 7, AWS SQS emulado por
+LocalStack, tudo orquestrado por Docker Compose.
 
-## Project setup
+## Subir do zero
 
 ```bash
-$ bun install
+cp .env.example .env
+docker compose up -d --wait
+bun install
+bun run migration:up
+bun run start:dev
 ```
 
-## Compile and run the project
+A aplicação sobe em `http://localhost:3000`. O Postgres publica a porta **2004**
+do host para evitar conflito com instalações locais na 5432.
+
+Verificação rápida:
 
 ```bash
-# development
-$ bun run start
-
-# watch mode
-$ bun run start:dev
-
-# production mode
-$ bun run start:prod
+curl http://localhost:3000/health/ready
 ```
 
-## Run tests
+## Comandos
 
-```bash
-# unit tests
-$ bun run test
+| Comando | O que faz |
+|---|---|
+| `bun run start:dev` | Sobe a aplicação com recarga automática |
+| `bun run check` | Tipos, lint, guarda de migrations e testes unitários |
+| `bun run test` | Apenas os testes unitários, sem infraestrutura |
+| `bun run test:integration` | Integração e concorrência, exige Docker no ar |
+| `bun run migration:up` / `:down` / `:list` | Migrations versionadas e reversíveis |
+| `bun run check:migrations` | Falha se algum tipo de ponto flutuante aparecer numa migration |
+| `bun run format` | Prettier |
 
-# e2e tests
-$ bun run test:e2e
+Antes de rodar `test:integration`, **pare a aplicação** ou use
+`CONSUMER_ENABLED=false`: o consumidor do processo disputa mensagens com o dos
+testes.
 
-# test coverage
-$ bun run test:cov
+## API
+
+### Criar carteira
+
+```http
+POST /wallets
+Content-Type: application/json
+
+{
+  "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
+  "initialBalance": { "amount": "1000.00", "currency": "BRL" }
+}
 ```
 
-## Deployment
+O saldo inicial gera uma transação interna `OPENING` com lançamento `CREDIT` na
+mesma transação SQL.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+### Submeter transação
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+```http
+POST /wagering/transactions
+Idempotency-Key: provider-a:transaction-123
+Content-Type: application/json
 
-```bash
-$ bun install -g @nestjs/mau
-$ mau deploy
+{
+  "providerId": "provider-a",
+  "externalTransactionId": "transaction-123",
+  "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
+  "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37",
+  "roundId": "round-987",
+  "gameId": "fortune-chimp",
+  "kind": "BET",
+  "money": { "amount": "25.00", "currency": "BRL" }
+}
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+O header `Idempotency-Key` é obrigatório e é a fonte da verdade. O `payloadHash`
+é o SHA-256 de um JSON canônico dos campos de negócio, com o valor monetário
+normalizado para escala 2 — `"25.0"` e `"25.00"` descrevem a mesma operação.
 
-## Resources
+### Reconciliação
 
-Check out a few resources that may come in handy when working with NestJS:
+```http
+POST /wallets/{walletId}/reconciliation
+```
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+Compara saldo materializado com a reconstrução do ledger. Divergências são
+logadas e contabilizadas, nunca corrigidas.
 
-## Support
+### Observabilidade
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+```http
+GET /health/live     # processo vivo, não consulta dependências
+GET /health/ready    # PostgreSQL e SQS alcançáveis
+GET /metrics         # formato de exposição do Prometheus
+```
 
-## Stay in touch
+## Status HTTP
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+| Situação | Código |
+|---|---|
+| Sucesso, incluindo replay idempotente | 200 |
+| Carteira criada | 201 |
+| Aceita, aguardando a transação referenciada | 202 |
+| Payload inválido | 400 |
+| Recurso inexistente | 404 |
+| Conflito de idempotência ou carteira duplicada | 409 |
+| Rejeição por regra de negócio, com `failureCode` | 422 |
 
-## License
+## Filas
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+| Fila | Papel |
+|---|---|
+| `wager-transactions.fifo` | Entrada de transações, com DLQ após 5 entregas |
+| `wager-events.fifo` | Eventos de integração publicados pelo outbox |
+
+Mensagens são agrupadas por carteira, preservando ordem por carteira sem
+serializar carteiras distintas. A deduplicação por conteúdo está desligada de
+propósito: a garantia é o inbox persistente, não o broker.
+
+## Autenticação
+
+Não implementada, conforme permitido pela seção 2 do enunciado. O desenho
+adotado e o ponto de extensão estão documentados no `ARCHITECTURE.md`.
+
+### Consultas
+
+```http
+GET /wallets/{walletId}
+GET /wallets/{walletId}/ledger?cursor=...&limit=50
+GET /wagering/transactions/{transactionId}
+GET /providers/{providerId}/wagering/transactions/{externalTransactionId}
+```
+
+O ledger é paginado por cursor opaco, com `limit` entre 1 e 100 e padrão 50. A
+resposta traz `entries` e `nextCursor`, que é `null` na última página.

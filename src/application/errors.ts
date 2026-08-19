@@ -20,11 +20,23 @@ export class WalletAlreadyExistsError extends ApplicationError {
   }
 }
 
+export class TransactionNotFoundError extends ApplicationError {
+  constructor(readonly reference: string) {
+    super(`transação não encontrada: ${reference}`);
+  }
+}
+
 export class IdempotencyConflictError extends ApplicationError {
   constructor(readonly idempotencyKey: string) {
     super(
       `chave de idempotência reutilizada com payload diferente: ${idempotencyKey}`,
     );
+  }
+}
+
+export class InvalidCursorError extends ApplicationError {
+  constructor(readonly cursor: string) {
+    super(`cursor de paginação inválido: ${cursor}`);
   }
 }
 

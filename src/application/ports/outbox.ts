@@ -17,6 +17,9 @@ export interface OutboxStore {
     batchSize: number,
     handler: (message: PendingMessage) => Promise<void>,
   ): Promise<number>;
+
+  /** Idade da mensagem pendente mais antiga, em segundos. Zero se não houver. */
+  oldestPendingAgeSeconds(): Promise<number>;
 }
 
 export interface MessagePublisher {

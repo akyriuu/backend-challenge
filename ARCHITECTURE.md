@@ -6,6 +6,54 @@ descreve o contexto, a escolha, suas consequências e a alternativa descartada.
 
 ## Fundação: runtime, compilação e testes
 
+
+### 0. AUTENTICAÇÃO NÃO FOI IMPLEMENTADA. (Ponto de extensão expllícito)
+
+### 37. Autenticação não implementada, com ponto de extensão explícito
+**Contexto.** A seção 2 do enunciado afirma que autenticação não pontua na tabela
+de avaliação e permite explicitamente não implementá-la, desde que a decisão
+esteja documentada, o desenho descrito e o ponto de extensão visível no código.
+
+
+**Decisão.** Não implementada. O tempo foi direcionado para correção financeira,
+concorrência, idempotência e mensageria, que somam 70 dos 100 pontos.
+
+
+**Desenho que seria adotado.** Keycloak subindo no mesmo `docker-compose.yml`,
+com um *client* por provedor no fluxo *client credentials*. Cada provedor
+obteria um token de acesso e o enviaria em `Authorization: Bearer`. O serviço
+validaria a assinatura contra o JWKS do realm, com cache das chaves, e extrairia
+o identificador do provedor de uma claim dedicada — não do corpo da requisição.
+O escopo `wagering:write` autorizaria a submissão de transações; as consultas
+exigiriam `wagering:read`. Nada disso encostaria em caso de uso ou domínio.
+Keycloak em vez de autenticação artesanal porque o enunciado é explícito ao
+recusar tabela própria de usuários com hash de senha, e porque rotação de chaves,
+expiração e revogação são exatamente o tipo de coisa que se implementa mal
+quando se implementa à mão.
+
+
+**Ponto de extensão.** `ProviderIdentityResolver`, em
+`src/api/auth/provider-identity.ts`, é a porta. A implementação atual,
+`TrustedPayloadIdentityResolver`, aceita o `providerId` declarado no corpo sem
+verificar nada. Trocar essa classe por um resolvedor que valide JWT é a única
+alteração necessária: nenhum controller, caso de uso ou regra de domínio muda.
+
+
+**O guard não é decorativo.** `ProviderAuthGuard` já exige que o `providerId` do
+corpo coincida com a identidade resolvida, respondendo 403 quando divergem. Com o
+resolvedor permissivo isso é tautologia — mas o caminho de código existe, testado
+pelo fluxo normal, e passa a ser a barreira que impede um provedor de submeter
+transações em nome de outro no instante em que um Identity Provider real for
+plugado.
+
+
+**Escopo do que a autenticação não cobre.** Health checks e `/metrics` ficam
+abertos, como a seção 2 determina. Mensagens vindas da fila são tratadas como
+canal interno confiável — mas a identidade do provedor contida na mensagem
+continua sujeita às mesmas validações de domínio: a resolução de referência
+compara `providerId`, e uma reversão que aponte para transação de outro provedor
+é rejeitada com `REFERENCE_MISMATCH`, autenticada ou não.
+
 ### 1. O Bun é o runtime; o TypeScript é apenas verificador de tipos
 
 **Contexto.** O scaffold do NestJS compila com `tsc` para `dist/` e executa o
@@ -427,24 +475,33 @@ diferença de reconciliação e obrigaria um segundo tipo só para isso.
 
 
 ### 19. A única exceção de lint do projeto, e por que ela existe
+
 **Contexto.** A guarda de `src/domain` proíbe `Number(`, `parseFloat`,
 `parseInt`, `+` unário e `toFixed`, por casamento sintático. O casamento de
 `toFixed` é feito pelo nome do método, e o ESLint não tem como saber sobre qual
 tipo ele está sendo chamado.
+
+
 **Decisão.** `Money.toString()` usa `Decimal.prototype.toFixed(2)`, com um
 `eslint-disable-next-line no-restricted-syntax` local e comentado. É o único
 `eslint-disable` do repositório.
+
+
 **Justificativa.** O `toFixed` proibido pelo enunciado é o do `Number`, que
 formata um binário de ponto flutuante e arredonda de forma dependente de
 representação. O do `Decimal` é aritmética decimal exata, e é a única forma de
 preservar o zero à direita — `new Decimal('100.50').toString()` devolve
 `'100.5'`, que violaria a escala fixa de duas casas exigida pela coluna
 `numeric(20,2)` e pela serialização na fronteira HTTP.
+
+
 **Alternativa descartada.** Formatar à mão, dividindo a string no ponto e
 completando com `padEnd`. Elimina o `disable` e é igualmente exata, já que
 `Money.from` garante no máximo duas casas — mas reimplementa mal o que a
 biblioteca já faz, e troca uma exceção explícita e justificada por código que
 parece desconhecer a ferramenta.
+
+
 **Verificação.** A exceção foi confirmada removendo o comentário de `disable` e
 observando a guarda acusar a linha, e recolocando-o em seguida. Um `disable` que
 silencia uma regra que nunca dispararia é ruído; este silencia uma detecção real.
@@ -621,83 +678,134 @@ mesma requisição, repetida duas vezes, produzir respostas diferentes — que �
 exatamente o que idempotência deveria impedir. É também a razão de `balanceBefore`
 e `balanceAfter` existirem no lançamento, e não apenas o valor movimentado.
 
---------------------------------------------------------------------------------------
-## Reconciliação, mensageria e concorrência
 ### 29. A reconciliação lê sob lock e nunca corrige
+
+
 **Contexto.** A seção 9 exige que divergências entre saldo materializado e ledger
 sejam logadas, contabilizadas e sinalizadas — nunca corrigidas silenciosamente.
+
+
 **Decisão.** `ReconcileWallet` carrega a carteira com `FOR UPDATE` antes de somar
 os lançamentos, e devolve `storedBalance`, `calculatedBalance`, `difference`,
 `consistent` e `checkedEntries` sem alterar nada.
+
+
 **Justificativa do lock.** Sem ele, uma escrita concorrente entre a leitura do
 saldo e a soma do ledger produziria divergência falsa. Uma reconciliação que
 grita lobo perde a serventia: se ela acusa erro em condições normais de
 concorrência, ninguém mais confia no alerta quando o erro for real.
+
+
+
 **Justificativa de não corrigir.** Divergência significa que algo escreveu no
 banco por fora do caso de uso. Ajustar o saldo destruiria a única evidência
 disso e transformaria um incidente investigável num número que ninguém explica.
+
+
 **Consequência.** A diferença pode ser negativa — o ledger supera o saldo — e é
 por isso que a decisão 18 precisou ser revista para `Money` com sinal. Um teste
 cobre exatamente esse caso.
 ### 30. O publisher reclama mensagens pulando as travadas
+
+
 **Contexto.** A seção 11 exige que múltiplos publishers concorrentes funcionem
 sem perder nem duplicar indefinidamente.
+
+
 **Decisão.** `MikroOrmOutboxStore.drain` seleciona o lote com
 `LockMode.PESSIMISTIC_PARTIAL_WRITE`, que o PostgreSQL traduz para
 `FOR UPDATE SKIP LOCKED`, e marca `published_at` na mesma transação.
+
+
 **Consequência.** N publishers dividem o trabalho: cada um trava o que conseguir
 e ignora o que outro já reservou, sem espera. Com `FOR UPDATE` comum, o segundo
 publisher bloquearia até o primeiro terminar — funcionaria, mas seria
 serialização disfarçada de paralelismo. Um teste com dois publishers e 40
 mensagens verifica que nenhuma foi entregue duas vezes e nenhuma se perdeu.
+
+
 **Limitação aceita.** A transação permanece aberta durante as chamadas ao SQS.
 Se o processo morrer entre a publicação e o commit, a mensagem é republicada —
 entrega at-least-once, absorvida pelo inbox do consumidor. Fechar a transação
 antes de publicar inverteria o risco para perda de evento, que é pior.
+
+
 **Falha isolada por mensagem.** Um evento problemático incrementa `attempts` e
 recebe `next_attempt_at` com backoff exponencial limitado a cinco minutos,
 enquanto os demais do lote seguem. Sem isso, uma única mensagem defeituosa
 travaria a fila inteira.
+
+
 ### 31. Eventos de integração têm fila própria
+
+
 **Contexto.** A seção 10 nomeia `wager-transactions.fifo` e sua DLQ como filas de
 **entrada** de transações. A seção 11 exige publicar eventos de integração, mas
 não nomeia destino.
+
+
 **Decisão.** Uma fila separada, `wager-events.fifo`, com DLQ própria, provisionada
 pelo mesmo script de init do LocalStack.
+
+
 **Justificativa.** Publicar os eventos na fila de entrada faria o consumidor ler
 os próprios eventos como se fossem pedidos de transação — um laço de realimentação
 que só apareceria em produção.
+
+
 ### 32. Agrupamento FIFO por carteira, com deduplicação explícita no envio
+
+
 **Decisão.** O `MessageGroupId` de cada evento é o `aggregateId`, que é o
 identificador da carteira. O `MessageDeduplicationId` é o `eventId`.
+
+
 **Consequência.** A ordem é preservada **por carteira**, que é a unidade de
 concorrência definida na seção 8, sem serializar carteiras distintas — um único
 grupo global transformaria a fila num gargalo. E como as filas foram criadas com
 `ContentBasedDeduplication` desligado (decisão 16), informar o id de
 deduplicação deixa de ser opcional: é o que impede o mesmo evento de entrar duas
 vezes quando o publisher republica após uma falha entre publicação e commit.
+
+
 ### 33. Inbox e efeito financeiro são a mesma transação, com um só carimbo
+
+
 **Contexto.** A seção 11 exige que inbox, alteração de saldo, ledger e outbox
 participem da mesma transação SQL.
+
+
 **Decisão.** O registro do inbox acontece dentro do `UnitOfWork` do caso de uso,
 por `insert ... on conflict do nothing`, e grava `received_at` e `processed_at`
 com o mesmo instante.
+
+
 **Justificativa do carimbo único.** Os dois só divergiriam se registrar e
 processar estivessem em transações diferentes. Sendo atômicos, a existência da
 linha já significa processamento concluído: se a transação abortar, a linha some
 junto. Manter dois carimbos idênticos por fidelidade ao esqueleto do enunciado
 sugeriria uma distinção que o desenho não tem.
+
+
 **Justificativa do `on conflict`.** No PostgreSQL, uma violação de constraint
 aborta a transação inteira, e capturar a exceção em JavaScript não a desfaz —
 qualquer comando seguinte falharia com "current transaction is aborted".
 `on conflict do nothing ... returning` resolve a corrida sem abortar nada.
+
+
 **Camadas distintas.** Reentrega não interrompe o fluxo: ela segue para o replay
 por chave de idempotência, que devolve o resultado original. O inbox impede
 reprocessar; a chave de idempotência garante a resposta certa. É a leitura
 prática da restrição 3 da seção 5, que proíbe confiar apenas no broker.
+
+
 ### 34. Três desfechos distintos para falha no consumidor
+
+
 **Contexto.** A seção 10 exige distinguir erro de negócio, transitório e
 permanente.
+
+
 **Decisão.** Rejeição de negócio — saldo insuficiente, referência inválida — não
 é exceção: o caso de uso devolve `REJECTED`, a mensagem é confirmada e o evento
 de rejeição sai pelo outbox. Payload malformado e conflito de idempotência são
@@ -705,30 +813,209 @@ permanentes: vão para a DLQ explicitamente e só então recebem ack. Qualquer
 outra falha é tratada como transitória: a mensagem **não** é confirmada, o SQS a
 reentrega ao expirar a visibilidade, e a política de redrive a leva à DLQ ao
 esgotar `maxReceiveCount`.
+
+
 **Ordem que importa.** O envio à DLQ precede o ack. Invertida, um processo que
 morresse no meio faria a mensagem desaparecer sem ter chegado a lugar nenhum.
+
+
 **Validação antecipada.** O parser valida a quantia com `Money.from` antes de
 qualquer acesso ao banco. Valor com três casas decimais é defeito de payload, não
 indisponibilidade — descobrir isso no parser manda a mensagem à DLQ de imediato,
 em vez de gastar cinco entregas até o `maxReceiveCount`.
+
+
 **Ack somente após commit.** O `execute` só retorna depois do commit, e o ack vem
 depois dele. Morrer entre commit e ack causa reentrega, absorvida pelo inbox;
 morrer antes do commit não deixa efeito algum.
+
+
 ### 35. "Múltiplas instâncias" nos testes são instâncias de ORM
+
+
 **Contexto.** A seção 13 exige testes com três ou mais processos ou instâncias
 simultâneos.
+
+
 **Decisão.** Os testes de concorrência criam três instâncias independentes de
 `MikroORM`, cada uma com pool de conexões e identity map próprios, e executam o
 caso de uso em paralelo sobre elas.
+
+
 **Justificativa.** As invariantes vivem no PostgreSQL, e o único estado
 compartilhado entre instâncias da aplicação é o banco. Do ponto de vista de
 locking, três pools distintos são indistinguíveis de três processos.
+
+
 **Limitação conhecida e assumida.** Processos de sistema operacional separados
 provariam isolamento de memória, que este desenho não usa para nada — não há
 cache em memória participando de nenhuma garantia, o que a restrição 2 da seção 5
 aliás proíbe. O que essa abordagem **não** cobre é falha de processo no meio de
 uma operação; esse cenário é exercitado de outra forma, reproduzindo em banco o
 estado que um processo morto entre o commit e o ack deixaria.
+
+
 **Efeito colateral operacional.** O consumidor da aplicação compete com o
 consumidor dos testes pela mesma fila. Por isso `CONSUMER_ENABLED` existe: a
 suíte de integração pressupõe a aplicação parada ou o consumidor desligado.
+
+### 36. Observabilidade sem dependência nova, e instrumentação opcional por construção
+
+**Contexto.** A seção 12 exige logs estruturados em JSON com identificadores de
+correlação, sem payload financeiro completo, e métricas cobrindo transações por
+status, duplicatas, retries, DLQ, conflitos de lock e outbox lag.
+
+**Decisão.** Os logs usam o `ConsoleLogger` do Nest 11 com `json: true`, sem
+biblioteca adicional. As métricas são um registro em memória exposto em
+`/metrics` no formato de exposição do Prometheus, atrás de uma porta `Metrics`.
+
+**Instrumentação é opcional por construção.** Os casos de uso e os workers
+recebem `Metrics` por `@Optional()`, com um padrão que não faz nada. Isso impede
+que instrumentação vire dependência dura da regra de negócio, e mantém os cinco
+arquivos de teste que constroem os casos de uso manualmente funcionando sem
+conhecer métricas.
+
+**Conflito de lock medido como espera, não como erro.** Com bloqueio pessimista
+não existe conflito que falhe — existe fila. Um contador de "conflitos" seria
+sempre zero e sugeriria ausência de contenção. O que revela carteira quente é a
+duração da aquisição do lock, medida em `wager_wallet_lock_wait_seconds`, com um
+contador auxiliar para aquisições acima de 50 ms.
+
+**Outbox lag medido na raspagem.** Atraso é uma grandeza instantânea: um
+contador acumulado responderia "quantas mensagens atrasaram", não "há quanto
+tempo a mais antiga espera". O gauge é calculado por consulta no momento do
+`GET /metrics`.
+
+**Limitação conhecida.** O registro é por processo e some no reinício. Com
+múltiplas instâncias, o coletor precisa raspar cada uma e agregar — que é o
+modelo normal do Prometheus, mas significa que `/metrics` de uma instância não
+descreve o sistema. Um backend compartilhado, como OpenTelemetry com coletor,
+seria o passo seguinte e está fora do escopo assumido.
+
+
+### 37. Agendamento de reversões órfãs derivado de um único contador
+
+**Contexto.** A seção 7.1 exige que transações em `PENDING_REFERENCE` sejam
+reprocessadas por worker agendado com backoff exponencial, com limite de
+tentativas ou TTL definido e justificado, e que o esgotamento produza `REJECTED`
+com um `failureCode` que identifique a referência inexistente.
+
+
+**Decisão.** Uma coluna, `reference_attempts`. O instante da próxima tentativa é
+derivado dela e de `created_at`, direto no predicado da consulta:
+`now() >= created_at + (least(1 << reference_attempts, 300) * interval '1 second')`.
+
+
+**Por que não guardar `next_attempt_at`.** Seriam dois campos que precisam
+concordar, e que um dia não concordam — um `UPDATE` que mexe num e esquece o
+outro deixa a pendência presa ou em rajada. Derivar elimina a possibilidade.
+O deslocamento de bits mantém a aritmética inteira: `power()` devolveria ponto
+flutuante, que não tem lugar neste sistema nem em consulta.
+
+
+**Limite escolhido: doze tentativas, cerca de trinta minutos.** O backoff começa
+em 2 segundos, dobra até o teto de 300, e a soma da série dá aproximadamente 28
+minutos. É folgado para chegada fora de ordem — em que a referência costuma vir
+em segundos — e curto o bastante para que um estorno órfão não fique pendente
+indefinidamente consumindo ciclos. Esgotado, vira `REJECTED` com
+`REFERENCE_NOT_FOUND` e evento correspondente.
+
+
+**Dupla leitura sob lock.** A consulta de elegíveis não trava nada, então dois
+workers podem selecionar a mesma pendência. Depois de adquirir o lock da
+carteira, o caso de uso **relê** a transação e desiste se o status já não for
+`PENDING_REFERENCE`. Sem isso, o segundo aplicaria o estorno de novo — a
+constraint única de `(wallet_id, transaction_id)` no ledger seria a rede final,
+mas como exceção de constraint, e não como comportamento correto. Um teste com
+dois workers concorrentes cobre exatamente esse caminho.
+
+
+**`reference_attempts` fora do domínio.** É metadado de agendamento, gerido pelo
+repositório com SQL direto, pelo mesmo argumento que mantém `attempts` fora do
+agregado no outbox. Por isso `update` persiste uma lista explícita de colunas em
+vez de reescrever o registro: reescrever zeraria o contador a cada transição, e
+o backoff nunca avançaria.
+
+### 38. Consultas não passam pelos agregados
+
+**Contexto.** A seção 9 exige quatro consultas, incluindo o ledger paginado por
+cursor estável e opaco.
+
+**Decisão.** `WageringQueries` lê o banco e devolve DTOs diretamente, sem
+reidratar `Wallet`, `WagerTransaction` ou `WalletLedgerEntry`.
+
+**Justificativa.** Leitura não tem invariante a proteger. Reconstruir o agregado
+para em seguida serializá-lo seria trabalho puro, e acoplaria o formato de saída
+ao modelo de escrita — que existe para outra finalidade. A separação também
+mantém o mapper de escrita livre de campos que só a API precisa.
+
+**Paginação por chave composta.** O cursor codifica `(created_at, id)` em
+base64url e a consulta usa `(created_at, id) < (?, ?)`, alinhada ao índice
+`wallet_ledger_entries_cursor_idx`. Offset degradaria linearmente e, pior,
+pularia ou repetiria linhas quando houvesse inserção durante a paginação — num
+ledger append-only isso é o caso comum, não a exceção. O cursor é opaco para que
+o consumidor não passe a depender do formato.
+
+**Uma linha a mais por página.** A consulta pede `limit + 1` e descarta a última:
+revela se há próxima página sem um `count` adicional, que num ledger grande
+custaria varredura.
+
+**Existência verificada antes de listar.** `GET /wallets/:id/ledger` consulta a
+carteira primeiro. Sem isso, um identificador inexistente devolveria página vazia
+com 200, e o provedor não teria como distinguir "carteira sem movimento" de
+"carteira que não existe".
+
+### 39. Falha transitória de infraestrutura responde 503, permanente responde 500
+
+**Contexto.** A seção 9 exige que a API distinga com clareza cinco situações, e a
+última delas — falha transitória de infraestrutura — é a única que não tem
+código próprio se todas as exceções caírem no tratador padrão do Nest.
+
+**Decisão.** Um filtro dedicado captura `DriverException` do MikroORM.
+`ConnectionException`, `DeadlockException` e `LockWaitTimeoutException` viram
+**503** com `Retry-After`; as demais viram **500**.
+
+**Justificativa da separação.** Conexão perdida, deadlock e espera de lock
+esgotada passam com o tempo, e o provedor deve reenviar. Erro de sintaxe, tabela
+inexistente ou coluna errada são defeito de schema: reenviar repete a falha, e
+responder 503 convidaria o provedor a insistir contra algo que nunca vai
+funcionar. Colapsar os dois num código só é exatamente o que a seção 9 proíbe.
+
+### 40. `FAILED` existe e é inalcançável neste desenho
+
+**Contexto.** A seção 6.3 prevê o estado `FAILED` para erro permanente de
+infraestrutura, terminal e auditável. A transição `fail()` está implementada e
+coberta por teste de domínio, mas nenhum caminho da aplicação a invoca.
+
+**Justificativa.** As duas falhas permanentes que o consumidor reconhece —
+payload malformado e conflito de idempotência — acontecem **antes** de existir
+transação persistida: a primeira no parser, a segunda ao comparar o hash com uma
+transação que já é de outra requisição. Não há registro para marcar como
+`FAILED`. E falha de infraestrutura durante o processamento aborta a transação
+SQL inteira, o que apaga qualquer registro que tivesse sido criado — persistir o
+`FAILED` exigiria uma segunda transação, que poderia falhar pelo mesmo motivo.
+
+**Decisão.** A transição permanece implementada e testada, sem uso. Ela passa a
+ser necessária no dia em que existir um caminho que persista a transação numa
+etapa e a aplique em outra — por exemplo um processamento em duas fases. Removê-la
+economizaria dez linhas e custaria a modelagem completa da máquina de estados que
+o enunciado descreve.
+
+### 41. Inbox e Outbox são tabelas, não agregados
+
+**Contexto.** A seção 6.5 apresenta `InboxMessage` e `OutboxMessage` como classes
+com construtor privado e factories, no mesmo formato dos agregados. O enunciado
+declara que esses blocos são esqueletos de referência.
+
+**Decisão.** As duas existem apenas como tabelas, manipuladas por repositório e
+store com SQL explícito. Não há classe de domínio para nenhuma delas.
+
+**Justificativa.** Nenhuma das duas carrega invariante de negócio. O inbox
+resolve deduplicação, e a garantia é a chave primária composta com
+`on conflict do nothing` — uma classe em memória não acrescentaria nada e
+introduziria a chance de divergir do que o banco realmente aceita. O outbox
+carrega agendamento: tentativas e backoff, que a decisão 30 já justifica manter
+fora do domínio pelo mesmo motivo que `reference_attempts` fica fora da
+transação. Transformá-las em agregados adicionaria mapeamento sem adicionar
+garantia, e o enunciado pede encapsulamento de estado e transições explícitas —
+que aqui vivem no schema, onde são verificáveis por teste de constraint.

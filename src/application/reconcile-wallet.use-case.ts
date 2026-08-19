@@ -1,5 +1,6 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { UNIT_OF_WORK, type UnitOfWork } from './ports/unit-of-work';
+import { METRICS, noopMetrics, type Metrics } from './ports/metrics';
 import { Money } from '@/domain/money';
 import { WalletNotFoundError } from './errors';
 
@@ -16,7 +17,12 @@ export interface ReconcileWalletResult {
 export class ReconcileWallet {
   private readonly logger = new Logger(ReconcileWallet.name);
 
-  constructor(@Inject(UNIT_OF_WORK) private readonly unitOfWork: UnitOfWork) {}
+  constructor(
+    @Inject(UNIT_OF_WORK) private readonly unitOfWork: UnitOfWork,
+    @Optional()
+    @Inject(METRICS)
+    private readonly metrics: Metrics = noopMetrics,
+  ) {}
 
   async execute(walletId: string): Promise<ReconcileWalletResult> {
     return this.unitOfWork.run(async (context) => {
@@ -42,7 +48,13 @@ export class ReconcileWallet {
       const difference = wallet.balance.subtract(calculatedBalance);
       const consistent = difference.isZero();
 
+      this.metrics.increment('wager_reconciliations_total', {
+        consistent: String(consistent),
+      });
+
       if (!consistent) {
+        this.metrics.increment('wager_reconciliation_divergences_total');
+
         this.logger.warn({
           message: 'divergência de reconciliação detectada',
           walletId,

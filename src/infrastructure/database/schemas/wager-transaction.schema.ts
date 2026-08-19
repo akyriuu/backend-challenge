@@ -25,6 +25,7 @@ export const WagerTransactionSchema = defineEntity({
     referenceTransactionId: p.uuid().nullable(),
     status: p.string().$type<WagerTransactionStatus>(),
     failureCode: p.string().$type<FailureCode>().nullable(),
+    referenceAttempts: p.integer(),
     createdAt: p.datetime(),
     processedAt: p.datetime().nullable(),
   },

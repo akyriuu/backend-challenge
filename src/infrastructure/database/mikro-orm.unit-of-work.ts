@@ -36,21 +36,28 @@ import {
   type WalletLedgerEntryRecord,
 } from './schemas/wallet-ledger-entry.schema';
 import { WalletSchema, type WalletRecord } from './schemas/wallet.schema';
+
 class MikroOrmWalletRepository implements WalletRepository {
   private readonly loaded = new Map<string, WalletRecord>();
+
   constructor(private readonly em: EntityManager) {}
+
   async findForUpdate(walletId: string): Promise<Wallet | null> {
     const record = await this.em.findOne(
       WalletSchema,
       { id: walletId },
       { lockMode: LockMode.PESSIMISTIC_WRITE },
     );
+
     if (!record) {
       return null;
     }
+
     this.loaded.set(walletId, record);
+
     return toWalletDomain(record);
   }
+
   /**
    * A unicidade por (playerId, currency) é do banco. Verificar antes com um
    * select abriria janela de corrida entre instâncias; aqui só traduzimos a
@@ -66,36 +73,52 @@ class MikroOrmWalletRepository implements WalletRepository {
       createdAt: wallet.createdAt,
       updatedAt: wallet.updatedAt,
     });
+
     try {
       await this.em.flush();
     } catch (error) {
       if (error instanceof UniqueConstraintViolationException) {
         throw new WalletAlreadyExistsError(wallet.playerId, wallet.currency);
       }
+
       throw error;
     }
   }
+
   async save(wallet: Wallet): Promise<void> {
     const record = this.loaded.get(wallet.id);
+
     if (!record) {
       throw new Error(
         `carteira ${wallet.id} não foi carregada sob lock nesta transação`,
       );
     }
+
     applyWalletToRecord(wallet, record);
+
     await this.em.flush();
   }
 }
+
 class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
   constructor(private readonly em: EntityManager) {}
+
+  async findById(id: string): Promise<WagerTransaction | null> {
+    const record = await this.em.findOne(WagerTransactionSchema, { id });
+
+    return record ? toWagerTransactionDomain(record) : null;
+  }
+
   async findByIdempotencyKey(
     idempotencyKey: string,
   ): Promise<WagerTransaction | null> {
     const record = await this.em.findOne(WagerTransactionSchema, {
       idempotencyKey,
     });
+
     return record ? toWagerTransactionDomain(record) : null;
   }
+
   /** Regra 2 da seção 7: a referência é resolvida pelo id do provedor. */
   async findByProviderReference(
     providerId: string,
@@ -105,8 +128,10 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
       providerId,
       externalTransactionId,
     });
+
     return record ? toWagerTransactionDomain(record) : null;
   }
+
   async hasReversal(
     referenceTransactionId: string,
     kind: WagerTransactionKind,
@@ -115,22 +140,55 @@ class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
       referenceTransactionId,
       kind,
     });
+
     return existing > 0;
   }
+
   async add(transaction: WagerTransaction): Promise<void> {
     this.em.create(
       WagerTransactionSchema,
       toWagerTransactionRecordData(transaction),
     );
+
     await this.em.flush();
+  }
+
+  /**
+   * Só os campos que uma transição de estado altera. Reescrever o registro
+   * inteiro sobrescreveria `reference_attempts`, que é gerido fora do domínio.
+   */
+  async update(transaction: WagerTransaction): Promise<void> {
+    await this.em.nativeUpdate(
+      WagerTransactionSchema,
+      { id: transaction.id },
+      {
+        status: transaction.status,
+        referenceTransactionId: transaction.referenceTransactionId ?? null,
+        failureCode: transaction.failureCode ?? null,
+        processedAt: transaction.processedAt ?? null,
+      },
+    );
+  }
+
+  async delayReferenceRetry(transactionId: string): Promise<void> {
+    await this.em.getConnection().execute(
+      `update wager_transactions
+            set reference_attempts = reference_attempts + 1
+          where id = ?`,
+      [transactionId],
+    );
   }
 }
+
 class MikroOrmLedgerRepository implements LedgerRepository {
   constructor(private readonly em: EntityManager) {}
+
   async append(entry: WalletLedgerEntry): Promise<void> {
     this.em.create(WalletLedgerEntrySchema, toLedgerEntryRecordData(entry));
+
     await this.em.flush();
   }
+
   async findByTransaction(
     transactionId: string,
   ): Promise<WalletLedgerEntry | null> {
@@ -138,8 +196,10 @@ class MikroOrmLedgerRepository implements LedgerRepository {
       WalletLedgerEntrySchema,
       { transactionId },
     );
+
     return record ? toLedgerEntryDomain(record) : null;
   }
+
   async summarize(walletId: string): Promise<LedgerSummary> {
     const rows = await this.em.getConnection().execute<LedgerSummary[]>(
       `select
@@ -150,11 +210,14 @@ class MikroOrmLedgerRepository implements LedgerRepository {
         where wallet_id = ?`,
       [walletId],
     );
+
     return rows[0] ?? { debits: '0', credits: '0', entries: 0 };
   }
 }
+
 class MikroOrmInboxRepository implements InboxRepository {
   constructor(private readonly em: EntityManager) {}
+
   /**
    * `on conflict do nothing` em vez de inserir e capturar a violação: no
    * PostgreSQL um erro de constraint aborta a transação inteira, e capturar a
@@ -181,13 +244,17 @@ class MikroOrmInboxRepository implements InboxRepository {
           entry.receivedAt,
         ],
       );
+
     return rows.length > 0;
   }
 }
+
 class MikroOrmOutboxRepository implements OutboxRepository {
   constructor(private readonly em: EntityManager) {}
+
   async enqueue(event: IntegrationEvent<object>): Promise<void> {
     const envelope = event.toJSON();
+
     this.em.create(OutboxMessageSchema, {
       id: envelope.eventId,
       aggregateId: envelope.aggregateId,
@@ -198,12 +265,15 @@ class MikroOrmOutboxRepository implements OutboxRepository {
       nextAttemptAt: null,
       publishedAt: null,
     });
+
     await this.em.flush();
   }
 }
+
 @Injectable()
 export class MikroOrmUnitOfWork implements UnitOfWork {
   constructor(private readonly em: EntityManager) {}
+
   run<T>(work: (context: TransactionalContext) => Promise<T>): Promise<T> {
     return this.em.transactional((tx: EntityManager) =>
       work({

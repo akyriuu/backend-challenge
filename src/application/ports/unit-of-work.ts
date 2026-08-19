@@ -26,6 +26,7 @@ export interface WalletRepository {
 }
 
 export interface WagerTransactionRepository {
+  findById(id: string): Promise<WagerTransaction | null>;
   findByIdempotencyKey(
     idempotencyKey: string,
   ): Promise<WagerTransaction | null>;
@@ -38,6 +39,10 @@ export interface WagerTransactionRepository {
     kind: WagerTransactionKind,
   ): Promise<boolean>;
   add(transaction: WagerTransaction): Promise<void>;
+  /** Persiste apenas o que muda por transição de estado. */
+  update(transaction: WagerTransaction): Promise<void>;
+  /** Incrementa o contador que define o backoff da próxima tentativa. */
+  delayReferenceRetry(transactionId: string): Promise<void>;
 }
 
 export interface LedgerRepository {
