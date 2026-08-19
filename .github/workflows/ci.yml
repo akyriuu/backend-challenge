@@ -35,6 +35,11 @@ jobs:
       - name: Subir Postgres e LocalStack
         run: docker compose up -d --wait
 
+      - name: Conferir provisionamento das filas
+        run: |
+          docker compose exec -T localstack awslocal sqs list-queues
+          docker compose logs localstack --tail 50
+
       - name: Aplicar migrations
         run: bun run migration:up
 

@@ -17,7 +17,10 @@ services:
       retries: 20
 
   localstack:
-    image: localstack/localstack:4
+    # Versão fixa, não a tag flutuante `4`: o runner parte de cache vazio e
+    # puxaria um build diferente do validado aqui, e o healthcheck depende do
+    # init hook, cujo comportamento é justamente o que pode mudar entre builds.
+    image: localstack/localstack:4.14.0
     container_name: wager-localstack
     environment:
       SERVICES: sqs
@@ -36,6 +39,10 @@ services:
           > /dev/null 2>&1 &&
           awslocal sqs get-queue-url --queue-name wager-events.fifo
           > /dev/null 2>&1
+      # Durante o start_period a sonda pode falhar sem condenar o container: o
+      # boot leva cerca de 40s, e contar isso como falha é o que transformava
+      # runner lento em job vermelho.
+      start_period: 40s
       interval: 5s
       timeout: 5s
-      retries: 30
+      retries: 20
