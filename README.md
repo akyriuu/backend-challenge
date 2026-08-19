@@ -1,4 +1,5 @@
-# BACKEND CHALLENGE
+# Technical Challenge — Distributed Wagering Processor
+ 
 
 Serviço financeiro distribuído que processa transações de apostas vindas de
 múltiplos provedores, por HTTP e por fila, com garantias de correção monetária,
