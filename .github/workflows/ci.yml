@@ -9,6 +9,19 @@ jobs:
   verificacao:
     runs-on: ubuntu-latest
 
+    env:
+      DATABASE_URL: postgresql://wager_app:wager_app@localhost:2004/wager
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      SQS_ENDPOINT: http://localhost:4566
+      SQS_QUEUE_URL: http://localhost:4566/000000000000/wager-transactions.fifo
+      SQS_TRANSACTIONS_DLQ_URL: http://localhost:4566/000000000000/wager-transactions-dlq.fifo
+      SQS_EVENTS_QUEUE_URL: http://localhost:4566/000000000000/wager-events.fifo
+      # A aplicação não sobe no CI, mas deixar explícito documenta que a suíte
+      # de integração pressupõe o consumidor desligado.
+      CONSUMER_ENABLED: 'false'
+
     steps:
       - uses: actions/checkout@v4
 
@@ -16,47 +29,20 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - run: bun install --frozen-lockfile
+      - name: Instalar dependências
+        run: bun install --frozen-lockfile
 
       - name: Subir Postgres e LocalStack
         run: docker compose up -d --wait
 
       - name: Aplicar migrations
         run: bun run migration:up
-        env:
-          DATABASE_URL: postgresql://wager_app:wager_app@localhost:2004/wager
-          AWS_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          SQS_ENDPOINT: http://localhost:4566
-          SQS_QUEUE_URL: http://localhost:4566/000000000000/wager-transactions.fifo
-          SQS_TRANSACTIONS_DLQ_URL: http://localhost:4566/000000000000/wager-transactions-dlq.fifo
-          SQS_EVENTS_QUEUE_URL: http://localhost:4566/000000000000/wager-events.fifo
 
       - name: Tipos, lint, guarda de migrations e testes unitários
         run: bun run check
-        env:
-          DATABASE_URL: postgresql://wager_app:wager_app@localhost:2004/wager
-          AWS_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          SQS_ENDPOINT: http://localhost:4566
-          SQS_QUEUE_URL: http://localhost:4566/000000000000/wager-transactions.fifo
-          SQS_TRANSACTIONS_DLQ_URL: http://localhost:4566/000000000000/wager-transactions-dlq.fifo
-          SQS_EVENTS_QUEUE_URL: http://localhost:4566/000000000000/wager-events.fifo
 
-      - name: Testes de integração e concorrência
+      - name: Integração e concorrência
         run: bun run test:integration
-        env:
-          DATABASE_URL: postgresql://wager_app:wager_app@localhost:2004/wager
-          AWS_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          SQS_ENDPOINT: http://localhost:4566
-          SQS_QUEUE_URL: http://localhost:4566/000000000000/wager-transactions.fifo
-          SQS_TRANSACTIONS_DLQ_URL: http://localhost:4566/000000000000/wager-transactions-dlq.fifo
-          SQS_EVENTS_QUEUE_URL: http://localhost:4566/000000000000/wager-events.fifo
-          CONSUMER_ENABLED: 'false'
 
       - name: Logs dos contêineres em caso de falha
         if: failure()
